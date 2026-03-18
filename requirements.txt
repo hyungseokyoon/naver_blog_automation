@@ -1,10 +1,11 @@
 playwright
 playwright-stealth
 python-dotenv
+google-genai
+pillow
 beautifulsoup4
 markdown
 pyyaml
 pyperclip
 pyautogui
 openpyxl
-google-generativeai

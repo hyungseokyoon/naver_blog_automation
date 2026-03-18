@@ -25,14 +25,15 @@ class NaverBlogWriter:
         for _ in range(15):
             frames = self.page.frames
             for f in frames:
-                if "mainFrame" in f.name:
-                    print(f"mainFrame을 발견했습니다 (URL: {f.url[:50]}...)")
+                # 대소문자 구분 없이 'mainframe' 확인하거나 URL에 'postwrite.naver' 포함 여부 확인
+                if "mainframe" in f.name.lower() or "postwrite.naver" in f.url:
+                    print(f"에디터 프레임을 발견했습니다: {f.name} (URL: {f.url[:50]}...)")
                     self.frame = f
                     break
             if self.frame:
                 # 에디터 내부의 특정 요소가 보일 때까지 대기
                 try:
-                    await self.frame.wait_for_selector(".se-documentTitle, .se-title-text, div[data-placeholder*='제목']", timeout=5000)
+                    await self.frame.wait_for_selector(".se-documentTitle, .se-title-text, div[data-placeholder*='제목'], .se-canvas", timeout=5000)
                     print("에디터 요소가 프레임 내에 로드되었습니다.")
                     break
                 except:
@@ -41,7 +42,7 @@ class NaverBlogWriter:
         
         if not self.frame:
             self.frame = self.page
-            print("최종적으로 메인 프레임을 사용합니다.")
+            print("에디터 프레임을 찾지 못해 최종적으로 메인 페이지를 사용합니다.")
 
     async def handle_popups(self):
         """임시 저장글 복구 및 도움말 팝업을 처리합니다."""
@@ -258,13 +259,138 @@ class NaverBlogWriter:
         except Exception as e:
             print(f"목록 추출 중 오류 발생: {e}")
 
+    async def upload_image(self, file_path: str):
+        """본문에 이미지를 업로드합니다. 모든 프레임에서 input을 검색하거나 사진 버튼을 클릭하여 시도합니다."""
+        print(f"이미지 업로드 중: {file_path}")
+        try:
+            # 1. 모든 프레임에서 input[type='file'] 탐색
+            file_input = None
+            # mainFrame 우선 탐색
+            if self.frame:
+                file_input = await self.frame.query_selector("input[type='file']")
+            
+            # 없으면 모든 프레임 순회
+            if not file_input:
+                for f in self.page.frames:
+                    try:
+                        found = await f.query_selector("input[type='file']")
+                        if found:
+                            file_input = found
+                            break
+                    except:
+                        continue
+            
+            # 마지막으로 top page 확인
+            if not file_input:
+                file_input = await self.page.query_selector("input[type='file']")
+
+            if file_input:
+                # input[type='file'] 발견 시 다이렉트 업로드
+                await file_input.set_input_files(file_path)
+                await asyncio.sleep(5) # 업로드 대기 시간을 넉넉히 가짐
+                print(f"이미지 업로드 성공: {file_path}")
+                return True
+            else:
+                # 2. input을 못 찾으면 사진 버튼을 클릭하여 파일 선택기(File Chooser) 유도
+                print("직접적인 input[type='file']을 찾지 못해 사진 버튼 클릭을 시도합니다.")
+                photo_btn_selectors = [
+                    ".se-image-toolbar-button", 
+                    ".se-toolbar-item-image button",
+                    "button:has-text('사진')",
+                    ".se-toolbar-button-image",
+                    ".se-toolbar-button.__image"
+                ]
+                
+                for sel in photo_btn_selectors:
+                    try:
+                        # top page와 mainFrame 양쪽에서 버튼 탐색
+                        btn = await self.frame.query_selector(sel) if self.frame else None
+                        if not btn:
+                            btn = await self.page.query_selector(sel)
+                        
+                        if btn:
+                            async with self.page.expect_file_chooser(timeout=5000) as fc_info:
+                                await btn.click()
+                                file_chooser = await fc_info.value
+                                await file_chooser.set_files(file_path)
+                                await asyncio.sleep(5)
+                                print(f"사진 버튼 클릭을 통해 이미지 업로드 완료: {file_path}")
+                                return True
+                    except Exception as e:
+                        # 특정 버튼 시도 중 오류는 넘기고 다음 버튼 시도
+                        continue
+                
+                print("이미지 업로드용 버튼 또는 input을 찾지 못했습니다.")
+                return False
+        except Exception as e:
+            print(f"이미지 업로드 중 오류 발생: {e}")
+            return False
+
+    async def write_post_from_json(self, post_data: dict, folder_path: str = None):
+        """JSON 데이터(Gemini 생성 결과)를 기반으로 포스팅을 수행합니다."""
+        title = post_data.get("title", "제목 없음")
+        content_blocks = post_data.get("content", [])
+        
+        await self.navigate_to_postwrite()
+        await self.handle_popups()
+        
+        # 1. 제목 입력
+        await self.write_title(title)
+        
+        # 2. 본문 블록 순차 입력
+        print(f"{len(content_blocks)}개의 블록을 작성합니다.")
+        for i, block in enumerate(content_blocks):
+            b_type = block.get("type")
+            if b_type == "text":
+                val = block.get("value", "")
+                if i == 0:
+                    await self.write_content(val)
+                else:
+                    await self.page.keyboard.press("Enter")
+                    await self.page.keyboard.type(val, delay=60)
+                    await asyncio.sleep(1)
+            
+            elif b_type == "image":
+                file_name = block.get("file")
+                if folder_path and file_name:
+                    f_path = os.path.join(folder_path, file_name)
+                    if os.path.exists(f_path):
+                        if await self.upload_image(f_path):
+                            # 캡션 입력 시도 (업로드 직후 활성화된 요소에 입력하거나 캡션 필드 직접 포커스)
+                            caption = block.get("caption")
+                            if caption:
+                                await asyncio.sleep(2) # 이미지 렌더링 대기
+                                # 캡션 영역 포커싱 시도
+                                caption_selectors = [".se-image-caption-editor", ".se-placeholder.__caption", "div[data-placeholder*='설명']"]
+                                for c_sel in caption_selectors:
+                                    try:
+                                        elements = await self.frame.query_selector_all(c_sel)
+                                        if elements:
+                                            await elements[-1].click()
+                                            await asyncio.sleep(0.5)
+                                            break
+                                    except:
+                                        pass
+                                
+                                await self.page.keyboard.type(caption, delay=60)
+                                await asyncio.sleep(1)
+                                # 캡션 입력 후 다음 블록 작성을 위해 본문 끝으로 이동 유도 (Esc 또는 Enter)
+                                await self.page.keyboard.press("Escape")
+                                await asyncio.sleep(0.5)
+                                await self.page.keyboard.press("ArrowDown")
+            
+            # 다음 블록을 위한 줄바꿈 (마지막 블록 제외)
+            if i < len(content_blocks) - 1:
+                await self.page.keyboard.press("Enter")
+                await asyncio.sleep(1)
+        
+        return await self.publish()
+
     async def write_test_post(self, title: str = "test", content: str = "test"):
         """테스트 포스팅 전체 과정을 수행합니다."""
         await self.navigate_to_postwrite()
         await self.handle_popups()
         await self.write_title(title)
         await self.write_content(content)
-        success = await self.publish()
-        if not success:
-            raise Exception("발행 과정 중 문제가 발생했습니다.")
+        return await self.publish()
 

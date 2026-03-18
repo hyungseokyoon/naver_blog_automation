@@ -1,5 +1,6 @@
 # Internal IDE/Agent folders
 .serena/
+.agent/
 
 # Environment variables
 .env
@@ -17,3 +18,5 @@ ENV/
 # Project specific
 data/sessions/
 data/logs/
+.agent/
+_agent/
