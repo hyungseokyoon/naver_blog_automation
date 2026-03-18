@@ -1,0 +1,20 @@
+# Internal IDE/Agent folders
+.serena/
+.agent/
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+ENV/
+
+# OS
+.DS_Store
+
+# Project specific
+data/sessions/
+data/logs/

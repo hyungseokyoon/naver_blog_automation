@@ -1,0 +1,10 @@
+playwright
+playwright-stealth
+python-dotenv
+beautifulsoup4
+markdown
+pyyaml
+pyperclip
+pyautogui
+openpyxl
+google-generativeai
