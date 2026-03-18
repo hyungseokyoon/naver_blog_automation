@@ -1,6 +1,5 @@
 # Internal IDE/Agent folders
 .serena/
-.agent/
 
 # Environment variables
 .env
